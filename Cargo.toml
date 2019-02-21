@@ -16,4 +16,5 @@ chrono = "0.4.6"
 rar = "0.2.0"
 rand = "0.6.5"
 failure = "0.1.5"
+unrar = "0.4.3"
 serde = {version ="1.0.88", features = ["derive"]}

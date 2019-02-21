@@ -1,27 +1,29 @@
-extern crate hyper;
-extern crate serde_json;
-extern crate serde;
-extern crate url;
-extern crate tokio;
-extern crate text_io;
-extern crate zip;
 extern crate chrono;
-extern crate rand;
 extern crate failure;
+extern crate hyper;
+extern crate rand;
+extern crate serde;
+extern crate serde_json;
+extern crate text_io;
+extern crate tokio;
+extern crate unrar;
+extern crate url;
+extern crate zip;
 
-use serde::Deserialize;
-use hyper::Client;
-use url::Url;
-use hyper::rt::Stream;
-use hyper::rt::Future;
-use tokio::runtime::Runtime;
-use std::io::Write;
-use text_io::*;
-use zip::read::ZipArchive;
 use chrono::Local;
-use rar::Archive;
+use hyper::rt::Future;
+use hyper::rt::Stream;
+use hyper::Client;
 use rand::Rng;
+use serde::Deserialize;
 use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use text_io::*;
+use tokio::runtime::Runtime;
+use unrar::Archive;
+use url::Url;
+use zip::read::ZipArchive;
 
 macro_rules! notice {
     ($($arg:tt)*) => ({
@@ -117,7 +119,8 @@ fn download(video_file: String, keyword: &String) -> bool {
     let mut detail_uri: Url = "http://api.assrt.net/v1/sub/detail".parse().unwrap();
     {
         let mut query = search_uri.query_pairs_mut();
-        query.append_pair("token", token)
+        query
+            .append_pair("token", token)
             .append_pair("q", keyword.as_str())
             .append_pair("pos", "0")
             .append_pair("cnt", "100")
@@ -126,7 +129,8 @@ fn download(video_file: String, keyword: &String) -> bool {
     }
     notice!("search uri {}", search_uri.as_str());
     match rt.block_on(
-        client.get(search_uri.as_str().parse().unwrap())
+        client
+            .get(search_uri.as_str().parse().unwrap())
             .and_then(|res| res.into_body().concat2())
             .from_err::<FetchError>()
             .and_then(|body| {
@@ -141,7 +145,9 @@ fn download(video_file: String, keyword: &String) -> bool {
             .and_then(move |res| {
                 let mut index: usize;
                 loop {
-                    notice!("there are more subtitles found, please select one of them, input number:");
+                    notice!(
+                        "there are more subtitles found, please select one of them, input number:"
+                    );
                     let mut i = 0;
                     for s in &res.sub.subs {
                         notice!("[{}]{:?}", i, s);
@@ -160,7 +166,8 @@ fn download(video_file: String, keyword: &String) -> bool {
                     query.append_pair("id", res.sub.subs[index].id.to_string().as_str());
                 }
                 notice!("detail url {:?}", detail_uri);
-                client.get(detail_uri.as_str().parse().unwrap())
+                client
+                    .get(detail_uri.as_str().parse().unwrap())
                     .and_then(|res| res.into_body().concat2())
                     .from_err::<FetchError>()
                     .and_then(|body| {
@@ -175,7 +182,8 @@ fn download(video_file: String, keyword: &String) -> bool {
                     .and_then(|res| {
                         notice!("download url {:?}", res.sub.subs[0].url);
                         let client = Client::new();
-                        client.get(res.sub.subs[0].url.parse().unwrap())
+                        client
+                            .get(res.sub.subs[0].url.parse().unwrap())
                             .and_then(|res| res.into_body().concat2())
                             .from_err::<FetchError>()
                             .and_then(move |body| {
@@ -207,7 +215,8 @@ fn download(video_file: String, keyword: &String) -> bool {
                                 } else {
                                     let name = rand::thread_rng()
                                         .sample_iter(&rand::distributions::Alphanumeric)
-                                        .take(30).collect::<String>();
+                                        .take(30)
+                                        .collect::<String>();
                                     let name = std::env::temp_dir().join(&name);
                                     let mut file = std::fs::File::create(&name)?;
                                     file.write_all(&body)?;
@@ -219,38 +228,68 @@ fn download(video_file: String, keyword: &String) -> bool {
                     .or_else(|err| {
                         if let FetchError::Logic(name) = err {
                             notice!("rar file found {}", name);
-                            let archive = Archive::extract_all(name.as_str(), ".", "")?;
-                            let mut files = Vec::new();
-                            for i in 0..archive.files.len() {
-                                files.push(archive.files[i].name.clone());
+                            let source = std::env::temp_dir()
+                                .to_path_buf()
+                                .to_str()
+                                .unwrap()
+                                .to_string();
+                            let target = ".".to_string();
+                            if let Ok(mut archive) = Archive::new(name).extract_to(source) {
+                                if let Ok(entries) = archive.process() {
+                                    let mut files = Vec::new();
+                                    for entry in &entries {
+                                        if entry.is_directory() {
+                                            continue;
+                                        }
+                                        let from = std::env::temp_dir().join(&entry.filename);
+                                        let to = Path::new(&target).join(from.file_name().unwrap());
+                                        notice!("copy from {:?} to {:?}", &from, &to);
+                                        std::fs::copy(&from, &to)?;
+                                        files.push(
+                                            from.file_name().unwrap().to_str().unwrap().to_string(),
+                                        );
+                                    }
+                                    return Ok(files);
+                                }
                             }
-                            Ok(files)
+                            Err(FetchError::Logic("unrar failed".to_string()))
                         } else {
                             println!("save data failed {:?}", err);
                             Err(err)
                         }
                     })
                     .and_then(move |files| {
-                        let mut index = 0;
                         if files.len() == 0 {
-                            Err(FetchError::Logic("no subtitles found in archive".to_owned()))
-                        }  else if let Some(suffix_offset) = files[0].rfind(".") {
+                            Err(FetchError::Logic(
+                                "no subtitles found in archive".to_owned(),
+                            ))
+                        } else if let Some(suffix_offset) = files[0].rfind(".") {
+                            println!("suffix offset {}", suffix_offset);
+                            let mut index = 0;
                             'outer: loop {
                                 for i in 0..files.len() {
-                                    if index >= files[0].len() || index >= suffix_offset {
+                                    if index >= suffix_offset - 1 {
+                                        break 'outer;
+                                    }
+                                    if index >= files[i].len() {
                                         break 'outer;
                                     }
                                     if files[0].as_bytes()[index] != files[i].as_bytes()[index] {
-                                        if index > 0 && files[0].as_bytes()[index -1] == '.' as u8 {
-                                           index -= 1;
+                                        if index > 0 && files[0].as_bytes()[index - 1] == '.' as u8
+                                        {
+                                            index -= 1;
                                         }
                                         break 'outer;
                                     }
                                 }
                                 index += 1;
                             }
-                            notice!("common prefix is {} {}", index, String::from_utf8_lossy(&files[0].as_bytes()[..index]));
-                            for file in &files  {
+                            notice!(
+                                "common prefix is {} {}",
+                                index,
+                                String::from_utf8_lossy(&files[0].as_bytes()[..index])
+                            );
+                            for file in &files {
                                 let (_, suffix) = file.split_at(index);
                                 let mut to = video_file.clone();
                                 to.push_str(suffix);
@@ -262,7 +301,7 @@ fn download(video_file: String, keyword: &String) -> bool {
                             Err(FetchError::Logic(format!("invalid subtitles {}", files[0])))
                         }
                     })
-            })
+            }),
     ) {
         Ok(data) => {
             notice!("fetch succeed with {:?}", data);
@@ -274,7 +313,6 @@ fn download(video_file: String, keyword: &String) -> bool {
         }
     }
 }
-
 
 fn main() {
     if std::env::args().len() < 2 {
