@@ -24,7 +24,6 @@ use rand::Rng;
 use std::io::Read;
 
 macro_rules! notice {
-    () => (print!("\n"));
     ($($arg:tt)*) => ({
         std::io::stdout().write(
             format!("{}{}\n",
@@ -242,7 +241,7 @@ fn download(video_file: String, keyword: &String) -> bool {
                                         break 'outer;
                                     }
                                     if files[0].as_bytes()[index] != files[i].as_bytes()[index] {
-                                        if files[0].as_bytes()[index -1] == '.' as u8 {
+                                        if index > 0 && files[0].as_bytes()[index -1] == '.' as u8 {
                                            index -= 1;
                                         }
                                         break 'outer;
